@@ -1,18 +1,11 @@
 """
-Recipe Memory - Flask Backend (v2)
-Innovate Track: Dish recovery + Allergy safety + Sustainable food future
-
-Changes from v1:
-- Gemini is now the PRIMARY dish identifier (knows every dish)
-- C++ classifier is SECONDARY (adds ML confidence layer for known dishes)
-- Dish images via Unsplash
-- Works even if user describes a dish not in training data
+Recipe Memory - Flask Backend (v3)
+QWER Hacks 2026 | Innovate Track
 
 Setup:
-    pip install flask google-generativeai pymongo
+    pip install flask google-generativeai
 
     export GEMINI_API_KEY="your-key-here"
-    export MONGO_URI="mongodb+srv://user:pass@cluster.mongodb.net/"
 
 Run:
     python app.py
@@ -21,14 +14,14 @@ Run:
 import os
 import json
 import subprocess
-from datetime import datetime
+import urllib.request
+import urllib.parse
 from flask import Flask, render_template, request, jsonify
 
 # ============================================================
 # CONFIG
 # ============================================================
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_KEY_HERE")
-MONGO_URI = os.environ.get("MONGO_URI", "")
 CPP_BINARY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cpp", "classifier")
 
 app = Flask(__name__, template_folder="static", static_folder="static")
@@ -49,53 +42,7 @@ def init_gemini():
         print(f"⚠️  Gemini not configured: {e}")
 
 # ============================================================
-# MONGODB
-# ============================================================
-mongo_db = None
-
-def init_mongo():
-    global mongo_db
-    if not MONGO_URI:
-        print("⚠️  MongoDB not configured (app works without it)")
-        return
-    try:
-        from pymongo import MongoClient
-        client = MongoClient(MONGO_URI)
-        mongo_db = client["recipe_memory"]
-        client.admin.command('ping')
-        print("✅ MongoDB connected")
-    except Exception as e:
-        print(f"⚠️  MongoDB failed: {e}")
-
-def save_recipe(data):
-    if not mongo_db:
-        return None
-    try:
-        data["created_at"] = datetime.utcnow().isoformat()
-        result = mongo_db["recovered_recipes"].insert_one(data)
-        return str(result.inserted_id)
-    except Exception as e:
-        print(f"MongoDB save error: {e}")
-        return None
-
-def get_recent_recipes(limit=12):
-    if not mongo_db:
-        return []
-    try:
-        recipes = list(mongo_db["recovered_recipes"].find(
-            {},
-            {"_id": 0, "user_description": 1,
-             "dish_info.identified_dish": 1,
-             "dish_info.region_of_origin": 1,
-             "dish_info.continent": 1,
-             "dish_info.image_url": 1}
-        ).sort("_id", -1).limit(limit))
-        return recipes
-    except:
-        return []
-
-# ============================================================
-# C++ CLASSIFIER (secondary — adds ML layer for judges)
+# C++ CLASSIFIER
 # ============================================================
 def classify_dish(description):
     try:
@@ -116,14 +63,6 @@ def classify_dish(description):
         return None
 
 # ============================================================
-# DISH IMAGE
-# ============================================================
-def get_dish_image(dish_name):
-    """Get a dish image URL using Unsplash source (no API key needed)."""
-    clean_name = dish_name.replace(" ", "+").replace("/", "+")
-    return f"https://source.unsplash.com/400x300/?{clean_name}+food+dish"
-
-# ============================================================
 # GEMINI: Primary identifier + history + recipe + allergens
 # ============================================================
 def get_dish_info(user_description, classification, allergies):
@@ -135,23 +74,23 @@ def get_dish_info(user_description, classification, allergies):
             "recipe": {"ingredients": [], "steps": []},
             "allergen_warnings": [],
             "sustainable_swaps": [],
-            "youtube_search_query": "",
-            "image_url": ""
+            "youtube_search_query": ""
         }
 
-    # Build context from C++ classifier (secondary info for Gemini)
     ml_context = ""
+    all_predictions_str = ""
     if classification:
         preds = classification.get("dish_predictions", [])
         if preds:
             top = preds[0]
             ml_context = f"""
-Our ML classifier (logistic regression on 20 known dishes) suggests: {top.get('dish', 'unknown')} 
+Our ML classifier suggests: {top.get('dish', 'unknown')} 
 from {top.get('region', 'unknown')} ({top.get('continent', 'unknown')}) 
 with {top.get('confidence', 0):.0%} confidence.
 Other ML guesses: {', '.join([p['dish'] for p in preds[1:]])}
-NOTE: The classifier only knows 20 dishes. If none of its guesses fit the description, 
-ignore them completely and identify the correct dish yourself."""
+NOTE: The classifier only knows 20 dishes. If none fit, identify the correct dish yourself."""
+            # Build list of all predicted dish names for multi-analysis
+            all_predictions_str = ", ".join([p['dish'] for p in preds[:3]])
 
     allergy_str = ", ".join(allergies) if allergies else "none specified"
 
@@ -162,9 +101,19 @@ ignore them completely and identify the correct dish yourself."""
 
 The user has these allergies/dietary restrictions: {allergy_str}
 
-YOUR JOB: Identify the dish based on the user's description. You are NOT limited to 
-the ML classifier's suggestions. You know every dish in the world. If the description 
-doesn't match the ML guesses, identify the correct dish yourself.
+YOUR JOB: Identify the dish AND analyze allergen risk for multiple dishes.
+
+CRITICAL — ALLERGEN RISK PERCENTAGE:
+Many dishes have MULTIPLE common recipe variants. For example, Baklava can be made 
+with pistachios (Turkish style) or without nuts (Greek custard style). 
+allergen_risk_percent should reflect: out of all common ways to make this dish, 
+what percentage of recipes contain the user's allergen?
+- ALL recipes contain it → 100
+- About half → 50
+- None → 0
+
+ALSO analyze allergen risk for these other predicted dishes: {all_predictions_str}
+Return their risk in the "other_dishes_risk" array.
 
 Respond in EXACTLY this JSON format. No markdown, no code blocks, ONLY raw JSON:
 {{
@@ -172,44 +121,50 @@ Respond in EXACTLY this JSON format. No markdown, no code blocks, ONLY raw JSON:
     "also_could_be": ["alternative 1", "alternative 2"],
     "region_of_origin": "specific region/country",
     "continent": "continent name",
-    "origin_lat": 0.0,
-    "origin_lng": 0.0,
-    "history": "A warm 2-3 paragraph history of this dish. Cultural significance, how it's traditionally made, interesting stories. Write like a grandmother telling the story.",
+    "allergen_risk_percent": 0,
+    "risk_explanation": "Brief explanation of risk percentage",
+    "other_dishes_risk": [
+        {{"dish": "dish name 1", "allergen_risk_percent": 0, "risk_explanation": "why"}},
+        {{"dish": "dish name 2", "allergen_risk_percent": 0, "risk_explanation": "why"}},
+        {{"dish": "dish name 3", "allergen_risk_percent": 0, "risk_explanation": "why"}}
+    ],
+    "history": "A warm 2-3 paragraph history. Write like a grandmother telling the story.",
     "recipe": {{
         "servings": "4",
-        "prep_time": "estimated prep time",
-        "cook_time": "estimated cook time",
-        "ingredients": ["ingredient 1 with amount", "ingredient 2 with amount"],
-        "steps": ["step 1", "step 2", "step 3"]
+        "prep_time": "time",
+        "cook_time": "time",
+        "ingredients": ["ingredient 1", "ingredient 2"],
+        "steps": ["step 1", "step 2"]
     }},
     "allergen_warnings": [
         {{
-            "allergen": "name of allergen",
-            "found_in": "which ingredient contains it",
+            "allergen": "allergen name",
+            "found_in": "ingredient",
             "severity": "high or moderate",
-            "substitute": "safe alternative ingredient"
+            "substitute": "safe alternative",
+            "variant_note": "which variants are safe vs unsafe"
         }}
     ],
+    "safe_variants": ["safe recipe variants"],
+    "unsafe_variants": ["unsafe recipe variants"],
     "sustainable_swaps": [
         {{
-            "original": "original ingredient",
-            "swap": "sustainable alternative",
-            "why": "environmental benefit",
-            "impact": "estimated carbon/water savings"
+            "original": "ingredient",
+            "swap": "alternative",
+            "why": "benefit",
+            "impact": "savings"
         }}
     ],
-    "youtube_search_query": "best YouTube search for cooking this dish",
-    "tips": "Tips for making this authentically as a first-timer",
-    "fun_fact": "One interesting fun fact about this dish",
-    "image_search_term": "simple 1-3 word English term for finding a photo of this exact dish"
+    "youtube_search_query": "search query",
+    "tips": "cooking tips",
+    "fun_fact": "fun fact"
 }}
 
 IMPORTANT:
-- YOU are the primary identifier. The ML classifier is just a hint.
-- If the user describes a dish the ML doesn't know, identify it yourself.
-- If the user has allergies, flag EVERY dangerous ingredient
-- Always include at least 2-3 sustainable_swaps
-- Be warm and encouraging"""
+- allergen_risk_percent must be a NUMBER (0-100)
+- other_dishes_risk must include risk for each ML prediction
+- Consider ALL recipe variants when calculating risk
+- Include 2-3 sustainable_swaps"""
 
     try:
         response = gemini_model.generate_content(prompt)
@@ -221,27 +176,30 @@ IMPORTANT:
             text = text.rsplit("```", 1)[0]
         text = text.strip()
 
-        dish_info = json.loads(text)
+        # Sometimes Gemini adds trailing commas or extra text
+        # Find the JSON object boundaries
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start >= 0 and end > start:
+            text = text[start:end]
 
-        # Add image URL
-        image_term = dish_info.get("image_search_term", dish_info.get("identified_dish", "food"))
-        dish_info["image_url"] = get_dish_image(image_term)
-
-        return dish_info
+        return json.loads(text)
 
     except json.JSONDecodeError as e:
         print(f"JSON parse error: {e}")
         raw = response.text if response else "None"
-        print(f"Raw response (first 500 chars): {raw[:500]}")
+        print(f"Raw: {raw[:500]}")
         return {
             "identified_dish": "Unknown",
             "history": raw,
             "recipe": {"ingredients": [], "steps": []},
             "allergen_warnings": [],
+            "allergen_risk_percent": 0,
+            "safe_variants": [],
+            "unsafe_variants": [],
             "sustainable_swaps": [],
             "youtube_search_query": "",
-            "tips": "",
-            "image_url": get_dish_image("food")
+            "tips": ""
         }
     except Exception as e:
         print(f"Gemini error: {e}")
@@ -251,14 +209,16 @@ IMPORTANT:
             "history": f"Error: {str(e)}",
             "recipe": {"ingredients": [], "steps": []},
             "allergen_warnings": [],
+            "allergen_risk_percent": 0,
+            "safe_variants": [],
+            "unsafe_variants": [],
             "sustainable_swaps": [],
             "youtube_search_query": "",
-            "tips": "",
-            "image_url": ""
+            "tips": ""
         }
 
 # ============================================================
-# API ROUTES
+# ROUTES
 # ============================================================
 
 @app.route("/")
@@ -274,37 +234,50 @@ def recover_recipe():
     if not description:
         return jsonify({"error": "Please describe the dish you remember!"}), 400
 
-    # Step 1: C++ classifier (secondary ML layer)
     classification = classify_dish(description)
-
-    # Step 2: Gemini as PRIMARY identifier
     dish_info = get_dish_info(description, classification, allergies)
 
-    # Step 3: Save to MongoDB
-    mongo_id = save_recipe({
-        "user_description": description,
-        "allergies": allergies,
+    return jsonify({
         "classification": classification,
         "dish_info": dish_info
     })
 
-    return jsonify({
-        "classification": classification,
-        "dish_info": dish_info,
-        "saved": mongo_id is not None
-    })
-
-@app.route("/api/recent")
-def recent():
-    recipes = get_recent_recipes()
-    return jsonify({"recipes": recipes})
+@app.route("/api/dish-image")
+def dish_image():
+    """Get a dish image from Wikipedia. Returns JSON with image URL."""
+    dish = request.args.get("dish", "food")
+    try:
+        # Wikipedia API: search for page and get main image
+        encoded = urllib.parse.quote(dish)
+        url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded}"
+        req = urllib.request.Request(url, headers={"User-Agent": "ALLERGUESS/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+            image_url = data.get("thumbnail", {}).get("source", "")
+            # Get higher res version by modifying the thumbnail URL
+            if image_url:
+                image_url = image_url.replace("/220px-", "/400px-")
+            return jsonify({"image_url": image_url, "dish": dish})
+    except Exception as e:
+        # Try with "(food)" suffix if plain name fails
+        try:
+            encoded = urllib.parse.quote(dish + " (food)")
+            url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded}"
+            req = urllib.request.Request(url, headers={"User-Agent": "ALLERGUESS/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+                image_url = data.get("thumbnail", {}).get("source", "")
+                if image_url:
+                    image_url = image_url.replace("/220px-", "/400px-")
+                return jsonify({"image_url": image_url, "dish": dish})
+        except:
+            return jsonify({"image_url": "", "dish": dish})
 
 @app.route("/api/health")
 def health():
     return jsonify({
         "status": "ok",
         "gemini": gemini_model is not None,
-        "mongodb": mongo_db is not None,
         "classifier": os.path.exists(CPP_BINARY)
     })
 
@@ -313,17 +286,15 @@ def health():
 # ============================================================
 if __name__ == "__main__":
     print("\n" + "="*50)
-    print("🍽️  Recipe Memory — Innovate Track")
+    print("🍽️  ALLERGUESS — Innovate Track")
     print("   QWER Hacks 2026")
     print("="*50 + "\n")
 
     init_gemini()
-    init_mongo()
 
     if not os.path.exists(CPP_BINARY):
         print(f"\n⚠️  C++ classifier not compiled!")
-        print(f"   Run: cd cpp && g++ -o classifier classifier.cpp")
-        print(f"   App works without it but won't have ML classification.\n")
+        print(f"   Run: cd cpp && g++ -o classifier classifier.cpp\n")
     else:
         print("✅ C++ classifier found")
 

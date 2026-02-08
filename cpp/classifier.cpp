@@ -390,10 +390,23 @@ int main(int argc, char* argv[]) {
     // Classify user input
     vector<double> inputFeatures = extractFeatures(userInput, vocab);
 
+    // Convert input to lowercase for name matching
+    string inputLower = userInput;
+    for (auto& c : inputLower) c = tolower(c);
+
     // Dish predictions
     vector<pair<double, int>> dishScores;
     for (size_t d = 0; d < dishes.size(); d++) {
         double prob = predict(inputFeatures, dishes[d].weights, dishes[d].bias);
+
+        // BOOST: if the user typed the dish name (or close to it), boost confidence by 60%
+        string dishLower = dishes[d].name;
+        for (auto& c : dishLower) c = tolower(c);
+        // Check if dish name appears in input (e.g. "baklava" in "sweet baklava pastry")
+        if (inputLower.find(dishLower) != string::npos) {
+            prob = prob + (1.0 - prob) * 0.6;  // boost toward 1.0 by 60%
+        }
+
         dishScores.push_back({prob, d});
     }
     sort(dishScores.begin(), dishScores.end(), [](const auto& a, const auto& b) {
