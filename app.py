@@ -101,70 +101,94 @@ NOTE: The classifier only knows 20 dishes. If none fit, identify the correct dis
 
 The user has these allergies/dietary restrictions: {allergy_str}
 
-YOUR JOB: Identify the dish AND analyze allergen risk for multiple dishes.
+YOUR JOB: Return FULL information for the top match AND for each of these other predicted dishes: {all_predictions_str}
 
-CRITICAL — ALLERGEN RISK PERCENTAGE:
-Many dishes have MULTIPLE common recipe variants. For example, Baklava can be made 
-with pistachios (Turkish style) or without nuts (Greek custard style). 
-allergen_risk_percent should reflect: out of all common ways to make this dish, 
-what percentage of recipes contain the user's allergen?
-- ALL recipes contain it → 100
-- About half → 50
-- None → 0
+Each dish needs: history, recipe, allergen analysis, sustainable swaps, etc.
 
-ALSO analyze allergen risk for these other predicted dishes: {all_predictions_str}
-Return their risk in the "other_dishes_risk" array.
+ALLERGEN RISK: Consider ALL common recipe variants. If a dish has versions with and without the allergen, the risk should be proportional (e.g. 50% if half of common recipes contain it).
 
 Respond in EXACTLY this JSON format. No markdown, no code blocks, ONLY raw JSON:
 {{
-    "identified_dish": "the correct dish name",
-    "also_could_be": ["alternative 1", "alternative 2"],
-    "region_of_origin": "specific region/country",
-    "continent": "continent name",
-    "allergen_risk_percent": 0,
-    "risk_explanation": "Brief explanation of risk percentage",
-    "other_dishes_risk": [
-        {{"dish": "dish name 1", "allergen_risk_percent": 0, "risk_explanation": "why"}},
-        {{"dish": "dish name 2", "allergen_risk_percent": 0, "risk_explanation": "why"}},
-        {{"dish": "dish name 3", "allergen_risk_percent": 0, "risk_explanation": "why"}}
-    ],
-    "history": "A warm 2-3 paragraph history. Write like a grandmother telling the story.",
-    "recipe": {{
-        "servings": "4",
-        "prep_time": "time",
-        "cook_time": "time",
-        "ingredients": ["ingredient 1", "ingredient 2"],
-        "steps": ["step 1", "step 2"]
-    }},
-    "allergen_warnings": [
+    "dishes": [
         {{
-            "allergen": "allergen name",
-            "found_in": "ingredient",
-            "severity": "high or moderate",
-            "substitute": "safe alternative",
-            "variant_note": "which variants are safe vs unsafe"
-        }}
-    ],
-    "safe_variants": ["safe recipe variants"],
-    "unsafe_variants": ["unsafe recipe variants"],
-    "sustainable_swaps": [
+            "dish_name": "top match dish name",
+            "region_of_origin": "region",
+            "continent": "continent",
+            "allergen_risk_percent": 0,
+            "risk_explanation": "why this risk level",
+            "history": "Warm 2-3 paragraph history. Write like a grandmother.",
+            "recipe": {{
+                "servings": "4",
+                "prep_time": "time",
+                "cook_time": "time",
+                "ingredients": ["ingredient 1 with amount", "ingredient 2"],
+                "steps": ["step 1", "step 2", "step 3"]
+            }},
+            "allergen_warnings": [
+                {{
+                    "allergen": "name",
+                    "found_in": "ingredient",
+                    "severity": "high or moderate",
+                    "substitute": "safe alternative",
+                    "variant_note": "which variants safe vs unsafe"
+                }}
+            ],
+            "safe_variants": ["safe versions"],
+            "unsafe_variants": ["unsafe versions"],
+            "sustainable_swaps": [
+                {{
+                    "original": "ingredient",
+                    "swap": "alternative",
+                    "why": "benefit",
+                    "impact": "savings"
+                }}
+            ],
+            "youtube_search_query": "search query",
+            "tips": "cooking tips",
+            "fun_fact": "fun fact"
+        }},
         {{
-            "original": "ingredient",
-            "swap": "alternative",
-            "why": "benefit",
-            "impact": "savings"
+            "dish_name": "second predicted dish",
+            "region_of_origin": "region",
+            "continent": "continent",
+            "allergen_risk_percent": 0,
+            "risk_explanation": "why",
+            "history": "2-3 paragraph history",
+            "recipe": {{"servings":"4","prep_time":"time","cook_time":"time","ingredients":[],"steps":[]}},
+            "allergen_warnings": [],
+            "safe_variants": [],
+            "unsafe_variants": [],
+            "sustainable_swaps": [],
+            "youtube_search_query": "query",
+            "tips": "tips",
+            "fun_fact": "fact"
+        }},
+        {{
+            "dish_name": "third predicted dish",
+            "region_of_origin": "region",
+            "continent": "continent",
+            "allergen_risk_percent": 0,
+            "risk_explanation": "why",
+            "history": "2-3 paragraph history",
+            "recipe": {{"servings":"4","prep_time":"time","cook_time":"time","ingredients":[],"steps":[]}},
+            "allergen_warnings": [],
+            "safe_variants": [],
+            "unsafe_variants": [],
+            "sustainable_swaps": [],
+            "youtube_search_query": "query",
+            "tips": "tips",
+            "fun_fact": "fact"
         }}
-    ],
-    "youtube_search_query": "search query",
-    "tips": "cooking tips",
-    "fun_fact": "fun fact"
+    ]
 }}
 
 IMPORTANT:
+- The "dishes" array must have one entry per predicted dish (up to 3)
+- Each entry must have FULL history, recipe, allergens, swaps — not abbreviated
 - allergen_risk_percent must be a NUMBER (0-100)
-- other_dishes_risk must include risk for each ML prediction
 - Consider ALL recipe variants when calculating risk
-- Include 2-3 sustainable_swaps"""
+- Include 2-3 sustainable_swaps per dish
+- Histories should be warm and detailed"""
 
     try:
         response = gemini_model.generate_content(prompt)
